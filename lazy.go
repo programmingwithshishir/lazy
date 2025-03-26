@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/google/go-github/v50/github"
 	"golang.org/x/oauth2"
 )
-
-const projectsPath = "C:/hackathon/programs"
 
 type Template struct {
 	Cmd          string
@@ -30,41 +30,44 @@ var templates = Templates{
 	},
 }
 
+const projectsPath = "C:/hackathon/programs"
+
+// Displays the help prompt message
 func displayHelp() {
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("	create	- create a new project")
-	fmt.Println("	list	- lists local projects")
-	fmt.Println("Templates:")
-	fmt.Println("	--cpp	- basic template for a C++ project")
-	fmt.Println()
+	fmt.Println("	--help		   Show help screen")
+	fmt.Println("	create	   	   Create a new project")
+	fmt.Println("	list		   Display existing projects")
+	fmt.Println("Templates")
+	fmt.Println("	--cpp			   	   Sets a project folder path")
+	fmt.Println("	--node-react-vite	   Gets the current project folder path")
 }
 
-func createNewProject(argumentsCount int) {
-	if argumentsCount > 3 || argumentsCount < 3 {
-		fmt.Println("\nInvalid arguments!!")
-		fmt.Println("Usage: lazy create <project-name> <--template>")
+// Lists the project in the projects folder
+func listProjects(argumentsCount int) {
+	if argumentsCount > 1 {
+		fmt.Println("Invalid arguments!!")
+		fmt.Println("Usage: lazy list")
 		return
 	}
-}
 
-func listProjects(argumentsCount int) {
-	// Handling Invalid arguments
-	if argumentsCount > 1 || argumentsCount < 1 {
-		fmt.Println("\nInvalid Arguments!!")
-		fmt.Println("Usage: lazy list")
-	} else {
-		entries, _ := os.ReadDir(projectsPath)
-		fmt.Println("\nDirectories:")
-		for _, e := range entries {
-			if e.IsDir() {
-				fmt.Println(" ", e.Name())
-			}
+	entries, err := os.ReadDir(projectsPath)
+	if err != nil {
+		fmt.Println("Could not find projects directory")
+	}
+
+	fmt.Println()
+	fmt.Printf("Local Projects:\n")
+	for _, entry := range entries {
+		if entry.IsDir() {
+			fmt.Println(entry.Name())
 		}
 	}
 }
 
-func directoryExists(path string) bool {
+// Checks if a folder exists
+func folderExists(path string) bool {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return false
@@ -72,6 +75,7 @@ func directoryExists(path string) bool {
 	return info.IsDir()
 }
 
+// Create a Repository in Github
 func createGitHubRepo(token, name string) (*github.Repository, error) {
 	// Create authenticated GitHub client
 	ctx := context.Background()
@@ -95,19 +99,108 @@ func createGitHubRepo(token, name string) (*github.Repository, error) {
 	return createdRepo, nil
 }
 
+// Connects the local repository to Github
 func connectLocalToRemote(localPath, remoteURL string) error {
 	cmd := exec.Command("git", "remote", "add", "origin", remoteURL)
 	cmd.Dir = localPath
 	return cmd.Run()
 }
 
+// Creates a new project
+func createNewProject(argumentsCount int) {
+	projectName := strings.TrimSpace(os.Args[2])
+	localProjectPath := filepath.Join(projectsPath, projectName)
+	if argumentsCount > 3 || argumentsCount < 3 {
+		fmt.Println("\nInvalid arguments!!")
+		fmt.Println("Usage: lazy create <project-name> <--template>")
+		return
+	}
+	if folderExists(localProjectPath) {
+		fmt.Println("\nProject already exists!!")
+	} else {
+		if temp, exists := templates[os.Args[3]]; exists {
+			fmt.Println("Template Found")
+			if temp.FolderNeeded {
+				os.Mkdir(localProjectPath, 0755)
+				fmt.Println("Created project directory")
+				cmd := exec.Command("cmd", "/C", temp.Cmd)
+				cmd.Dir = localProjectPath
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				err := cmd.Run()
+				if err != nil {
+					fmt.Println("Error:", err)
+				}
+			} else {
+				cmd := exec.Command("cmd", "/C", strings.ReplaceAll(temp.Cmd, "$ProjectName", projectName))
+				cmd.Dir = projectsPath
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				err := cmd.Run()
+				if err != nil {
+					fmt.Println("Error:", err)
+				}
+			}
+			fmt.Println("Created project assets")
+		}
+
+		repo, err := createGitHubRepo("", projectName)
+		if err != nil {
+			fmt.Println("Error creating GitHub repository:", err)
+			return
+		}
+		fmt.Println("Initialized a github repository")
+		cmd := exec.Command("git", "init")
+		cmd.Dir = localProjectPath
+		cmd.Run()
+		fmt.Println("Initialized a git repository")
+		connectLocalToRemote(localProjectPath, *repo.CloneURL)
+		fmt.Println("Linked local repository to remote")
+
+		cmd = exec.Command("git", "add", "-A")
+		cmd.Dir = localProjectPath
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err = cmd.Run()
+		if err != nil {
+			fmt.Println("Error:", err)
+		}
+		cmd = exec.Command("git", "commit", "-m", "'Initial Commit'")
+		cmd.Dir = localProjectPath
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err = cmd.Run()
+		if err != nil {
+			fmt.Println("Error:", err)
+		}
+		cmd = exec.Command("git", "push", "--set-upstream", "origin", "master")
+		cmd.Dir = localProjectPath
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err = cmd.Run()
+		if err != nil {
+			fmt.Println("Error:", err)
+		}
+		cmd = exec.Command("code", ".")
+		cmd.Dir = localProjectPath
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err = cmd.Run()
+		if err != nil {
+			fmt.Println("Error:", err)
+		}
+	}
+}
+
 func main() {
 	argumentsCount := len(os.Args) - 1
+
+	// Handling commands based on first argument
 	if argumentsCount > 0 {
-		if os.Args[1] == "create" {
-			createNewProject(argumentsCount)
-		} else if os.Args[1] == "list" {
+		if os.Args[1] == "list" {
 			listProjects(argumentsCount)
+		} else if os.Args[1] == "create" {
+			createNewProject(argumentsCount)
 		} else {
 			displayHelp()
 		}
